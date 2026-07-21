@@ -126,13 +126,31 @@ def predict():
             GROQ_URL,
             headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
             json=payload,
-            timeout=30,
+            timeout=60,
         )
-        r.raise_for_status()
+    except Exception as e:
+        msg = f"Groq connection fail: {e}"
+        print("!!!", msg)
+        LAST["raw"] = msg
+        return jsonify(error=msg), 502
+
+    # Groq ki status + body ki dilo, sob log kori
+    print(">>> Groq status:", r.status_code)
+    print(">>> Groq body:", r.text[:800])
+
+    if r.status_code != 200:
+        # ei khane sadharonoto model deprecated / key / payload error dhora pore
+        msg = f"Groq returned {r.status_code}: {r.text[:300]}"
+        LAST["raw"] = msg
+        return jsonify(error=msg), 502
+
+    try:
         raw = r.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        LAST["raw"] = f"Groq call fail: {e}"
-        return jsonify(error=f"Groq call fail: {e}"), 502
+        msg = f"Groq response parse fail: {e} | body={r.text[:300]}"
+        print("!!!", msg)
+        LAST["raw"] = msg
+        return jsonify(error=msg), 502
 
     print("LLM raw:", raw)
     LAST["raw"] = raw
