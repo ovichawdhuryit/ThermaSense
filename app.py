@@ -29,12 +29,12 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 # Groq console e current vision model dekhe niyo, deprecate hole ekhane bodlao.
 MODEL = "qwen/qwen3.6-27b"
 
-
 PROMPT = (
     "You are a food-safety cooking assistant. Look at the food in the image, "
     "identify it, and give the safe cooking temperature in Celsius and the "
     "cooking time in minutes based on WHO/USDA guidelines. "
-    "Reply in EXACTLY this one-line format and nothing else:\n"
+    "Do NOT explain your reasoning. Do NOT think out loud. Do NOT use <think> tags. "
+    "Output ONLY one single line in EXACTLY this format and nothing else:\n"
     "Food: <name> --- Temperature: <number>°C --- Time: <number> minutes"
 )
 
@@ -91,6 +91,9 @@ def clamp_to_safe(food, temp, minutes):
 
 
 def parse_llm_output(text):
+    # reasoning model er <think>...</think> ongsho fele dei
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)  # jodi close na hoy
     food = re.search(r"Food:\s*(.+?)\s*---", text)
     temp = re.search(r"Temperature:\s*([\d.]+)", text)
     tm = re.search(r"Time:\s*([\d.]+)", text)
@@ -117,7 +120,8 @@ def predict():
     payload = {
         "model": MODEL,
         "temperature": 0.2,
-        "max_tokens": 100,
+        "max_tokens": 512,
+        "reasoning_effort": "none",
         "messages": [
             {
                 "role": "user",
