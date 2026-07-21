@@ -27,7 +27,8 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # Groq console e current vision model dekhe niyo, deprecate hole ekhane bodlao.
-MODEL = "llama-3.2-90b-vision-preview"
+MODEL = "qwen/qwen3.6-27b"
+
 
 PROMPT = (
     "You are a food-safety cooking assistant. Look at the food in the image, "
