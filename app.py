@@ -24,7 +24,8 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # NOTE: 'llama-3.2-11b-vision-preview' Groq-e deprecated hoye gese thakte pare.
 # Groq console e giye current vision model dekhe niyo (e.g. meta-llama/llama-4-scout-17b-16e-instruct).
-MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+#MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+MODEL = "llama-3.2-90b-vision-preview"
 
 # LLM ke ei exact format e reply dite bola hocche jate regex diye parse kora jay.
 PROMPT = (
