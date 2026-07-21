@@ -59,6 +59,14 @@ SAFE_RANGE = {  # (min_temp, max_temp, min_time, max_time)
 
 app = Flask(__name__)
 
+# --- jekono unhandled error hole full traceback log e chapabe ---
+import traceback
+@app.errorhandler(Exception)
+def _log_all_errors(e):
+    print("=== UNHANDLED ERROR ===")
+    traceback.print_exc()
+    return jsonify(error=str(e)), 500
+
 # ---------------- Last request state (browser e dekhar jonno) ----------------
 LAST = {
     "image": None,       # raw JPEG bytes
