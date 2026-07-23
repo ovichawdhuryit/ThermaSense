@@ -11,7 +11,7 @@ Notun ja ache:
   /health   -> "ok"
 
 Deploy (Render):
-  Start Command: gunicorn app:app
+  Start Command: gunicorn app:app --workers 1
   Env var:       GROQ_API_KEY = gsk_...
 """
 
@@ -61,12 +61,21 @@ SAFE_RANGE = {  # (min_temp, max_temp, min_time, max_time)
 app = Flask(__name__)
 
 # --- jekono unhandled error hole full traceback log e chapabe ---
+# NOTE: HTTPException (404, 405, 400 ...) ke pass kore dite hobe, na hole
+# favicon.ico er moto normal 404 o 500 hoye jay.
 import traceback
+import html as html_lib
+from werkzeug.exceptions import HTTPException
+
+
 @app.errorhandler(Exception)
 def _log_all_errors(e):
+    if isinstance(e, HTTPException):
+        return e  # 404 / 405 / 400 nijer asol status niye jabe
     print("=== UNHANDLED ERROR ===")
     traceback.print_exc()
     return jsonify(error=str(e)), 500
+
 
 # ---------------- Last request state (browser e dekhar jonno) ----------------
 LAST = {
@@ -190,6 +199,12 @@ def last_image():
     return Response(LAST["image"], mimetype="image/jpeg")
 
 
+@app.route("/favicon.ico")
+def favicon():
+    """Browser prottek page load e eta chay -- 204 diye chup korai."""
+    return "", 204
+
+
 @app.route("/")
 def dashboard():
     """Browser e last chobi + detection dekhabe. Auto-refresh 5s por por."""
@@ -197,6 +212,7 @@ def dashboard():
         body = "<p style='color:#888'>Ekhono kono chobi ashe nai. ESP32-CAM theke ekta chobi pathaao.</p>"
     else:
         matched_txt = "✅ ref table e match korese" if LAST["matched"] else "⚠️ table e match hoy nai (safe default)"
+        raw_safe = html_lib.escape(str(LAST["raw"]))
         body = f"""
           <img src="/last?t={int(time.time())}" alt="last food image"
                style="max-width:100%;border-radius:12px;border:1px solid #333"/>
@@ -207,7 +223,7 @@ def dashboard():
           </div>
           <p class="muted">{matched_txt}</p>
           <p class="muted">Chobi asher somoy: {LAST['at']}</p>
-          <details><summary>LLM raw output</summary><pre>{LAST['raw']}</pre></details>
+          <details><summary>LLM raw output</summary><pre>{raw_safe}</pre></details>
         """
 
     html = f"""<!doctype html>
