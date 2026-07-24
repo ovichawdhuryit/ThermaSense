@@ -1,11 +1,12 @@
 """
 ThermaSense - Bodda side server
 --------------------------------
-ESP32-CAM theke JPEG image receive kore, Groq-e LLaMA Vision call kore,
+ESP32-CAM theke JPEG image receive kore, Groq-e vision call kore,
 food name + temperature + time parse kore JSON return kore.
 
-Notun ja ache:
-  /         -> dashboard: last chobi + LLM ki detect korlo (browser e dekhar jonno)
+Routes:
+  /         -> dashboard (JS diye image + result quietly update hoy, full reload NAI)
+  /state    -> last detection JSON (dashboard JS eta fetch kore)
   /last     -> last chobi ta raw JPEG hisebe
   /predict  -> ESP32-CAM ekhane POST kore (image), JSON reply pay
   /health   -> "ok"
@@ -26,7 +27,6 @@ from flask import Flask, request, jsonify, Response
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# Groq console e current vision model dekhe niyo, deprecate hole ekhane bodlao.
 MODEL = "qwen/qwen3.6-27b"
 
 PROMPT = (
@@ -60,9 +60,7 @@ SAFE_RANGE = {  # (min_temp, max_temp, min_time, max_time)
 
 app = Flask(__name__)
 
-# --- jekono unhandled error hole full traceback log e chapabe ---
-# NOTE: HTTPException (404, 405, 400 ...) ke pass kore dite hobe, na hole
-# favicon.ico er moto normal 404 o 500 hoye jay.
+# --- unhandled error hole traceback log e, kintu 404/405 normal thakbe ---
 import traceback
 import html as html_lib
 from werkzeug.exceptions import HTTPException
@@ -71,21 +69,15 @@ from werkzeug.exceptions import HTTPException
 @app.errorhandler(Exception)
 def _log_all_errors(e):
     if isinstance(e, HTTPException):
-        return e  # 404 / 405 / 400 nijer asol status niye jabe
+        return e
     print("=== UNHANDLED ERROR ===")
     traceback.print_exc()
     return jsonify(error=str(e)), 500
 
 
-# ---------------- Last request state (browser e dekhar jonno) ----------------
 LAST = {
-    "image": None,       # raw JPEG bytes
-    "food": None,
-    "temp": None,
-    "time": None,
-    "matched": None,
-    "raw": None,
-    "at": None,          # kobe eshechilo
+    "image": None, "food": None, "temp": None, "time": None,
+    "matched": None, "raw": None, "at": None,
 }
 
 
@@ -100,9 +92,8 @@ def clamp_to_safe(food, temp, minutes):
 
 
 def parse_llm_output(text):
-    # reasoning model er <think>...</think> ongsho fele dei
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)  # jodi close na hoy
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
     food = re.search(r"Food:\s*(.+?)\s*---", text)
     temp = re.search(r"Temperature:\s*([\d.]+)", text)
     tm = re.search(r"Time:\s*([\d.]+)", text)
@@ -120,7 +111,6 @@ def predict():
     if not img_bytes:
         return jsonify(error="kono image pai nai"), 400
 
-    # last chobi ta rekhe dei jate /last o / te dekha jay
     LAST["image"] = img_bytes
     LAST["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -156,12 +146,10 @@ def predict():
         LAST["raw"] = msg
         return jsonify(error=msg), 502
 
-    # Groq ki status + body ki dilo, sob log kori
     print(">>> Groq status:", r.status_code)
     print(">>> Groq body:", r.text[:800])
 
     if r.status_code != 200:
-        # ei khane sadharonoto model deprecated / key / payload error dhora pore
         msg = f"Groq returned {r.status_code}: {r.text[:300]}"
         LAST["raw"] = msg
         return jsonify(error=msg), 502
@@ -191,9 +179,22 @@ def predict():
     return jsonify(food=food, temp=temp, time=minutes, matched=matched)
 
 
+@app.route("/state")
+def state():
+    """Dashboard JS eta fetch kore -- full page reload chara update korar jonno."""
+    return jsonify(
+        food=LAST["food"],
+        temp=LAST["temp"],
+        time=LAST["time"],
+        matched=LAST["matched"],
+        at=LAST["at"],
+        raw=LAST["raw"],
+        has_image=LAST["image"] is not None,
+    )
+
+
 @app.route("/last")
 def last_image():
-    """Last chobi ta raw JPEG hisebe."""
     if LAST["image"] is None:
         return "kono chobi ekhono ashe nai", 404
     return Response(LAST["image"], mimetype="image/jpeg")
@@ -201,53 +202,75 @@ def last_image():
 
 @app.route("/favicon.ico")
 def favicon():
-    """Browser prottek page load e eta chay -- 204 diye chup korai."""
     return "", 204
 
 
 @app.route("/")
 def dashboard():
-    """Browser e last chobi + detection dekhabe. Auto-refresh 5s por por."""
-    if LAST["image"] is None:
-        body = "<p style='color:#888'>Ekhono kono chobi ashe nai. ESP32-CAM theke ekta chobi pathaao.</p>"
-    else:
-        matched_txt = "✅ ref table e match korese" if LAST["matched"] else "⚠️ table e match hoy nai (safe default)"
-        raw_safe = html_lib.escape(str(LAST["raw"]))
-        body = f"""
-          <img src="/last?t={int(time.time())}" alt="last food image"
-               style="max-width:100%;border-radius:12px;border:1px solid #333"/>
-          <div class="grid">
-            <div class="card"><span>Food</span><b>{LAST['food']}</b></div>
-            <div class="card"><span>Temperature</span><b>{LAST['temp']} &deg;C</b></div>
-            <div class="card"><span>Time</span><b>{LAST['time']} min</b></div>
-          </div>
-          <p class="muted">{matched_txt}</p>
-          <p class="muted">Chobi asher somoy: {LAST['at']}</p>
-          <details><summary>LLM raw output</summary><pre>{raw_safe}</pre></details>
-        """
+    """
+    NO meta-refresh. JS 4 second por por /state fetch kore image + text update kore.
+    Page ta ar 'continuously reload' hobe na.
+    """
+    html = """<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ThermaSense</title>
+<style>
+  body{font-family:system-ui,Arial,sans-serif;background:#111;color:#eee;
+       max-width:640px;margin:0 auto;padding:20px}
+  h1{font-size:20px;letter-spacing:.5px}
+  .grid{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+  .card{flex:1;min-width:120px;background:#1c1c1c;border:1px solid #333;
+         border-radius:12px;padding:12px 14px}
+  .card span{display:block;font-size:12px;color:#888;margin-bottom:4px}
+  .card b{font-size:20px}
+  .muted{color:#888;font-size:13px}
+  img{max-width:100%;border-radius:12px;border:1px solid #333}
+  pre{background:#000;padding:10px;border-radius:8px;overflow:auto;font-size:12px}
+  summary{cursor:pointer;color:#9cf}
+</style></head>
+<body>
+  <h1>ThermaSense - Last Detection</h1>
+  <div id="empty" class="muted">Ekhono kono chobi ashe nai. ESP32-CAM theke ekta chobi pathaao.</div>
+  <div id="content" style="display:none">
+    <img id="shot" alt="last food image"/>
+    <div class="grid">
+      <div class="card"><span>Food</span><b id="food">-</b></div>
+      <div class="card"><span>Temperature</span><b id="temp">-</b></div>
+      <div class="card"><span>Time</span><b id="time">-</b></div>
+    </div>
+    <p class="muted" id="matched"></p>
+    <p class="muted" id="at"></p>
+    <details><summary>LLM raw output</summary><pre id="raw"></pre></details>
+  </div>
 
-    html = f"""<!doctype html>
-    <html><head><meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <meta http-equiv="refresh" content="5">
-    <title>ThermaSense</title>
-    <style>
-      body{{font-family:system-ui,Arial,sans-serif;background:#111;color:#eee;
-           max-width:640px;margin:0 auto;padding:20px}}
-      h1{{font-size:20px;letter-spacing:.5px}}
-      .grid{{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}}
-      .card{{flex:1;min-width:120px;background:#1c1c1c;border:1px solid #333;
-             border-radius:12px;padding:12px 14px}}
-      .card span{{display:block;font-size:12px;color:#888;margin-bottom:4px}}
-      .card b{{font-size:20px}}
-      .muted{{color:#888;font-size:13px}}
-      pre{{background:#000;padding:10px;border-radius:8px;overflow:auto;font-size:12px}}
-      summary{{cursor:pointer;color:#9cf}}
-    </style></head>
-    <body>
-      <h1>🍳 ThermaSense — Last Detection</h1>
-      {body}
-    </body></html>"""
+<script>
+async function tick(){
+  try{
+    const r = await fetch('/state', {cache:'no-store'});
+    const s = await r.json();
+    if(!s.has_image){
+      document.getElementById('empty').style.display='block';
+      document.getElementById('content').style.display='none';
+      return;
+    }
+    document.getElementById('empty').style.display='none';
+    document.getElementById('content').style.display='block';
+    // sudhu image ta re-fetch kori, page reload noy
+    document.getElementById('shot').src = '/last?t=' + Date.now();
+    document.getElementById('food').textContent = s.food;
+    document.getElementById('temp').textContent = s.temp + ' \\u00B0C';
+    document.getElementById('time').textContent = s.time + ' min';
+    document.getElementById('matched').textContent =
+      s.matched ? 'ref table e match korese' : 'table e match hoy nai (safe default)';
+    document.getElementById('at').textContent = 'Chobi asher somoy: ' + s.at;
+    document.getElementById('raw').textContent = s.raw || '';
+  }catch(e){ /* network hiccup, next tick e abar try korbe */ }
+}
+tick();
+setInterval(tick, 4000);
+</script>
+</body></html>"""
     return html
 
 
