@@ -27,7 +27,7 @@ from flask import Flask, request, jsonify, Response
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-MODEL = "qwen/qwen3.6-27b"
+MODEL = "qwen/qwen3.8-27b"
 
 PROMPT = (
     "You are a food-safety cooking assistant. Look at the food in the image, "
