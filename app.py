@@ -1,4 +1,3 @@
-
 """
 ThermaSense - Bodda Side Server V2
 -----------------------------------
@@ -60,7 +59,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-MODEL = "qwen/qwen3.8-27b"
+MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 MAX_IMAGE_SIZE = 8 * 1024 * 1024  # 8 MB
 
@@ -233,6 +232,7 @@ def update_state(request_id, **kwargs):
 
     """
     Prevent an older request from overwriting a newer request.
+    Returns True if the update was applied, False if skipped.
     """
 
     with STATE_LOCK:
@@ -247,6 +247,13 @@ def update_state(request_id, **kwargs):
 
 
 def fail_prediction(request_id, message):
+
+    """
+    Write an error state only if this request is still current.
+    If update_state returns False (a newer request has taken
+    over), we still return the error response to the caller
+    but do NOT overwrite the newer state.
+    """
 
     update_state(
 
@@ -599,6 +606,14 @@ def predict():
 
         })
 
+    # --------------------------------------------------------
+    # All work happens before update_state(success).
+    # update_state(success) is the very last mutation.
+    # This ensures that if anything throws, the except
+    # blocks correctly write an error state rather than
+    # overwriting a state that was never set to success.
+    # --------------------------------------------------------
+
     try:
 
         logger.info(
@@ -627,14 +642,29 @@ def predict():
 
         # Step 3: Reference table comparison.
 
-        reference_temp = get_reference_temperature(
-            food
-        )
+        reference_temp = get_reference_temperature(food)
 
         # matched means a reference entry exists.
+
         matched = reference_temp is not None
 
-        # Step 4: Update global state.
+        # Step 4: Build response dict before touching state.
+        # Nothing below this point can raise an exception
+        # from business logic, so update_state(success) is
+        # safe to call immediately after.
+
+        response_data = {
+            "status":        "success",
+            "food":          food,
+            "temp":          temperature,
+            "time":          cooking_time,
+            "reference_temp": reference_temp,
+            "matched":       matched,
+            "raw":           raw,
+        }
+
+        # Step 5: Commit success state — the very last
+        # mutation before returning to the caller.
 
         update_state(
 
@@ -665,25 +695,9 @@ def predict():
             cooking_time
         )
 
-        # Step 5: Send response to ESP32.
+        # Step 6: Send response to ESP32.
 
-        return jsonify(
-
-            status="success",
-
-            food=food,
-
-            temp=temperature,
-
-            time=cooking_time,
-
-            reference_temp=reference_temp,
-
-            matched=matched,
-
-            raw=raw
-
-        )
+        return jsonify(response_data)
 
     except requests.Timeout:
 
@@ -709,10 +723,11 @@ def predict():
 
         )
 
-    except (ValueError, KeyError, IndexError):
+    except (ValueError, KeyError, IndexError) as e:
 
         logger.exception(
-            "LLM response parsing failed."
+            "LLM response parsing failed: %s",
+            repr(e)
         )
 
         return fail_prediction(
@@ -723,10 +738,11 @@ def predict():
 
         )
 
-    except Exception:
+    except Exception as e:
 
         logger.exception(
-            "Unexpected prediction error."
+            "Unexpected prediction error: %s",
+            repr(e)
         )
 
         return fail_prediction(
@@ -1038,7 +1054,7 @@ async function tick() {
             s.food || "-";
 
         document.getElementById("temp").textContent =
-            s.temp !== null ? s.temp + " °C" : "Not available";
+            s.temp !== null ? s.temp + " \u00b0C" : "Not available";
 
         document.getElementById("time").textContent =
             s.time !== null ? s.time + " min" : "Not available";
@@ -1057,7 +1073,7 @@ async function tick() {
             reference.textContent =
                 "Reference temperature: "
                 + s.reference_temp
-                + " °C. This is separate from the LLM recommendation.";
+                + " \u00b0C. This is separate from the LLM recommendation.";
 
         } else {
 
